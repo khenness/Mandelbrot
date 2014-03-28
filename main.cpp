@@ -37,6 +37,8 @@
 #include <sys/time.h>
 #endif
 
+// OpenMP
+#include <omp.h>
 
 
 #include "Screen.h"
@@ -119,6 +121,7 @@ bool member(float cx, float cy, int& iterations)
 	float x = 0.0;
 	float y = 0.0;
 	iterations = 0;
+        //potential optimization
 	while ((x*x + y*y < (2*2)) && (iterations < MAX_ITS)) {
 		float xtemp = x*x - y*y + cx;
 		y = 2*x*y + cy;
@@ -141,6 +144,7 @@ int main()
 	Screen *screen;
 	screen = new Screen(HXRES, HYRES);
 
+
 	int depth=0;
 
 #ifdef TIMING
@@ -154,7 +158,9 @@ int main()
 	        /* record starting time */
 	        gettimeofday(&start_time, NULL);
 #endif
+                #pragma omp parallel for
 		for (hy=0; hy<HYRES; hy++) {
+		        #pragma omp parallel for
 			for (hx=0; hx<HXRES; hx++) {
 				int iterations;
 
