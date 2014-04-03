@@ -1,3 +1,4 @@
+
 /*
  * CS3014 Mandelbrot Project
  * 
@@ -24,6 +25,10 @@
  *     maximum number of iterations was reached before bailout. This means more CPU time was consumed
  */
 
+/*Change these to try different paralellization methods*/
+const bool OMP_ON = false;
+const bool PTHREADS_ON = true;
+const bool SSE_ON = false;
 
 
 #include <iostream>
@@ -40,6 +45,12 @@
 // OpenMP
 #include <omp.h>
 
+//SSE
+#include <xmmintrin.h>
+
+//pthreads
+#include <pthread.h> 
+
 
 #include "Screen.h"
 
@@ -54,9 +65,11 @@ const int 	HYRES = 700;			// vertical resolution
 const int 	MAX_DEPTH = 40;		// max depth of zoom
 const float ZOOM_FACTOR = 1.02;		// zoom between each frame
 
+
 /* Change these to zoom into different parts of the image */
 const float PX = -0.702295281061;	// Centre point we'll zoom on - Real component
 const float PY = +0.350220783400;	// Imaginary component
+
 
 
 /*
@@ -122,17 +135,78 @@ bool member(float cx, float cy, int& iterations)
 	float y = 0.0;
 	iterations = 0;
         //potential optimization
-	while ((x*x + y*y < (2*2)) && (iterations < MAX_ITS)) {
+
+/*	while ((x*x + y*y < (2*2)) && (iterations < MAX_ITS)) {
 		float xtemp = x*x - y*y + cx;
 		y = 2*x*y + cy;
 		x = xtemp;
 		iterations++;
 	}
+*/
+      while ((x*x + y*y < (4)) && (iterations < MAX_ITS)) {
+                float xtemp = x*x - y*y + cx;
+                y = 2*x*y + cy;
+                x = xtemp;
+                iterations++;
+        }
+
+
 
 	return (iterations == MAX_ITS);
 }
 
+struct PThreadParams {
+   //struct semaphore mySemaphore;
+   void * threadid;
+   int numcalc;
+   int hy;
+   float m;
+   Screen * screen;
+   unsigned char * pal;
+};
 
+
+
+//the function that all the pthreads will use
+void *PThreadFunction(void *context) {
+
+        //parameters
+        struct PThreadParams *readParams = context;
+        int threadid = readParams->threadid;
+        int numcalc = readParams->numcalc;
+        int hy = readParams->hy;
+        float m = readParams->m;
+        Screen * screen = readParams->screen;
+        unsigned char * pal = readParams->pal;
+//	printf("\n%d: Hello World!\n", threadid); 
+//      std::cout << "\n" << threadid << ": Hello World!";
+//        #pragma omp parallel for       //  #pragma OMP for
+        for (int hx=0; hx<numcalc; hx++) {
+           int iterations;
+
+           /*
+            * Translate pixel coordinates to complex plane coordinates centred
+            * on PX, PY
+            */
+
+             //potential optimization
+             float cx = ((((float)hx/(float)HXRES) -0.5 + (PX/(4.0/m)))*(4.0f/m));
+             float cy = ((((float)hy/(float)HYRES) -0.5 + (PY/(4.0/m)))*(4.0f/m));
+             if (!member(cx, cy, iterations)) {
+                 /* Point is not a member, colour based on number of iterations before escape */
+                 int i=(iterations%40) - 1;
+                 int b = i*3;
+
+                  //potential optimization
+                 screen->putpixel(hx, hy, pal[b], pal[b+1], pal[b+2]);
+            }else {
+                  /* Point is a member, colour it black */
+                  screen->putpixel(hx, hy, 0, 0, 0);
+            }
+         }
+
+	pthread_exit(NULL); 
+} 
 
 int main()
 {	
@@ -158,29 +232,59 @@ int main()
 	        /* record starting time */
 	        gettimeofday(&start_time, NULL);
 #endif
-                #pragma omp parallel for
-		for (hy=0; hy<HYRES; hy++) {
-		        #pragma omp parallel for
-			for (hx=0; hx<HXRES; hx++) {
-				int iterations;
+                //pthread version
+                 if(PTHREADS_ON == true){
+                    int rc;
+                    int NUM_PTHREADS = HYRES;
+                    pthread_t threads[NUM_PTHREADS];
+                    
+                    for(int i=0;i<NUM_PTHREADS;i++) {
+                       struct PThreadParams readParams;
+                       readParams.threadid = (void *)i;
+                       readParams.numcalc = HXRES;
+                       readParams.hy = i;
+                       readParams.screen = screen;
+                       readParams.m =m;
+                       readParams.pal = pal;
+                       rc = pthread_create(&threads[i],NULL,PThreadFunction,&readParams);
+                       if (rc) {
+                          printf("ERROR return code from pthread_create(): %d\n",rc);
+                          exit(-1);
+                       }
+                    }
+                    //wait for them to join
+                    for(int i=0;i<NUM_PTHREADS;i++) {
+                         pthread_join( threads[i], NULL);
+                    }
 
-				/* 
-				 * Translate pixel coordinates to complex plane coordinates centred
-				 * on PX, PY
-				 */
-				float cx = ((((float)hx/(float)HXRES) -0.5 + (PX/(4.0/m)))*(4.0f/m));
-				float cy = ((((float)hy/(float)HYRES) -0.5 + (PY/(4.0/m)))*(4.0f/m));
+                 }else{
+                  //OMP version
+                    #pragma omp parallel for collapse(2)  //change
+		    for (hy=0; hy<HYRES; hy++) {
+	               for (hx=0; hx<HXRES; hx++) {
+		          int iterations;
 
-				if (!member(cx, cy, iterations)) {
-					/* Point is not a member, colour based on number of iterations before escape */
-					int i=(iterations%40) - 1;
-					int b = i*3;
-					screen->putpixel(hx, hy, pal[b], pal[b+1], pal[b+2]);
-				} else {
-					/* Point is a member, colour it black */
-					screen->putpixel(hx, hy, 0, 0, 0);
-				}
+		    	   /*
+		            * Translate pixel coordinates to complex plane coordinates centred
+		            * on PX, PY
+		            */
+
+                             //potential optimization
+		            float cx = ((((float)hx/(float)HXRES) -0.5 + (PX/(4.0/m)))*(4.0f/m));
+			    float cy = ((((float)hy/(float)HYRES) -0.5 + (PY/(4.0/m)))*(4.0f/m));
+		            if (!member(cx, cy, iterations)) {
+				/* Point is not a member, colour based on number of iterations before escape */
+				int i=(iterations%40) - 1;
+				int b = i*3;
+
+                                //potential optimization
+			        screen->putpixel(hx, hy, pal[b], pal[b+1], pal[b+2]);
+			    }else {
+			        /* Point is a member, colour it black */
+				screen->putpixel(hx, hy, 0, 0, 0);
+		            }
 			}
+		    }
 		}
 #ifdef TIMING
 		gettimeofday(&stop_time, NULL);
@@ -193,8 +297,6 @@ int main()
 		/* Zoom in */
 		m *= ZOOM_FACTOR;
 	}
-	
-	sleep(10);
 #ifdef TIMING
 	std::cout << "Total executing time " << total_time << " microseconds\n";
 #endif

@@ -160,7 +160,7 @@ int main()
 #endif
                 #pragma omp parallel for
 		for (hy=0; hy<HYRES; hy++) {
-		
+		        #pragma omp parallel for
 			for (hx=0; hx<HXRES; hx++) {
 				int iterations;
 

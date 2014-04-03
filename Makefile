@@ -1,6 +1,6 @@
 CC=g++
-CFLAGS=-c -Wall -ansi
-LDFLAGS=
+CFLAGS=-c -Wall -ansi -O3 -fopenmp -pthread -fpermissive
+LDFLAGS= -fopenmp
 SOURCES=main.cpp Screen.cpp
 OBJECTS=$(SOURCES:.cpp=.o)
 EXECUTABLE=mandelbrot
