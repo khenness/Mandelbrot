@@ -27,8 +27,8 @@
 
 /*Change these to try different paralellization methods*/
 const bool OMP_ON = false;
-const int PTHREADS_ON = 1;
-const int NUM_PTHREADS = 300;
+const int PTHREADS_ON = 0;
+int NUM_PTHREADS = 300;  //starting number
 
 const int VECTORIZATION_ON =1;
 const bool SSE_ON = false;
@@ -238,7 +238,7 @@ int main()
         int threadcount =0;
 //                    int NUM_PTHREADS = 4060;
 
-        pthread_t threads[NUM_PTHREADS];
+       // pthread_t threads[NUM_PTHREADS];
 	while (depth < MAX_DEPTH) {
 #ifdef TIMING
 	        /* record starting time */
@@ -255,7 +255,7 @@ int main()
                    //get the size of the subsquares
                    double SubSquareSide =  ceil(sqrt((HXRES*HYRES)/(NUM_PTHREADS)));
 
-
+/*
                    int hx2 =0;
                    int hy2 =0;
                    int count =0;
@@ -268,6 +268,13 @@ int main()
                       hy2= hy2+SubSquareSide;
                    }
                   // std::cout<<"count = " <<count<<"\n";
+*/
+//                   pthread_t threads[NUM_PTHREADS];
+                         if(depth %20 == 0  ){
+                            NUM_PTHREADS = NUM_PTHREADS +300;
+                            SubSquareSide =  ceil(sqrt((HXRES*HYRES)/(NUM_PTHREADS)));
+                         }
+                         pthread_t threads[NUM_PTHREADS];
 
 
                    //give a subsquare of the screen to each thread
@@ -277,9 +284,6 @@ int main()
                    while(hy<HYRES-SubSquareSide){
                       while(hx<HXRES-SubSquareSide){
                          //808
-                         if(depth % 10 == 0 ){
-                            
-                         }
                           
                            //create threads
                             struct PThreadParams readParams;
@@ -320,7 +324,7 @@ int main()
 
                  }else{
                   //OMP version
-//                    #pragma omp parallel for collapse(2)  //change
+                    #pragma omp parallel for collapse(2)  //change
 		    for (hy=0; hy<HYRES; hy++) {
 	               for (hx=0; hx<HXRES; hx++) {
 		          int iterations;
