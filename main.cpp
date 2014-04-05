@@ -27,7 +27,7 @@
 
 /*Change these to try different paralellization methods*/
 const bool OMP_ON = false;
-const bool PTHREADS_ON = true;
+const int PTHREADS_ON = 1;
 const bool SSE_ON = false;
 
 
@@ -158,9 +158,10 @@ bool member(float cx, float cy, int& iterations)
 struct PThreadParams {
    //struct semaphore mySemaphore;
    void * threadid;
-   int numcalc;
-   int hy;
-   float m;
+   int SubSquareSide;
+   int xpos;
+   int ypos;
+   float m; //magnification
    Screen * screen;
    unsigned char * pal;
 };
@@ -169,54 +170,54 @@ struct PThreadParams {
 
 //the function that all the pthreads will use
 void *PThreadFunction(void *context) {
+   //read parameters
+   struct PThreadParams *readParams = context;
+   int SubSquareSide = readParams->SubSquareSide;
+  // int threadid = readParams->threadid;
+   int xpos = readParams->xpos;
+   int ypos = readParams->ypos;
+   float m = readParams->m;
+   Screen * screen = readParams->screen;
+   unsigned char * pal = readParams->pal;
 
-        //parameters
-        struct PThreadParams *readParams = context;
-        int threadid = readParams->threadid;
-        int numcalc = readParams->numcalc;
-        int hy = readParams->hy;
-        float m = readParams->m;
-        Screen * screen = readParams->screen;
-        unsigned char * pal = readParams->pal;
-//	printf("\n%d: Hello World!\n", threadid); 
-//      std::cout << "\n" << threadid << ": Hello World!";
-//        #pragma omp parallel for       //  #pragma OMP for
-        for (int hx=0; hx<numcalc; hx++) {
+   for (int hy=ypos; hy<(ypos+SubSquareSide); hy++) {
+      for (int hx=xpos; hx<(xpos+SubSquareSide); hx++) {
            int iterations;
+            // Translate pixel coordinates to complex plane coordinates centred on PX, PY
 
-           /*
-            * Translate pixel coordinates to complex plane coordinates centred
-            * on PX, PY
-            */
+               //potential optimization
+               float cx = ((((float)hx/(float)HXRES) -0.5 + (PX/(4.0/m)))*(4.0f/m));
+               float cy = ((((float)hy/(float)HYRES) -0.5 + (PY/(4.0/m)))*(4.0f/m));
+               if (!member(cx, cy, iterations)) {
+                 // Point is not a member, colour based on number of iterations before escape 
 
-             //potential optimization
-             float cx = ((((float)hx/(float)HXRES) -0.5 + (PX/(4.0/m)))*(4.0f/m));
-             float cy = ((((float)hy/(float)HYRES) -0.5 + (PY/(4.0/m)))*(4.0f/m));
-             if (!member(cx, cy, iterations)) {
-                 /* Point is not a member, colour based on number of iterations before escape */
-                 int i=(iterations%40) - 1;
-                 int b = i*3;
+
+                   int i=(iterations%40) - 1;
+                   int b = i*3;
 
                   //potential optimization
                  screen->putpixel(hx, hy, pal[b], pal[b+1], pal[b+2]);
-            }else {
-                  /* Point is a member, colour it black */
-                  screen->putpixel(hx, hy, 0, 0, 0);
-            }
+              }else {
+                    // Point is a member, colour it black 
+                    screen->putpixel(hx, hy, 0, 0, 0);
+              }
+           }
          }
-
 	pthread_exit(NULL); 
 } 
 
+
 int main()
 {	
-	int hx, hy;
+	int hx=0;
+        int hy=0;
 
 	float m=1.0; /* initial  magnification		*/
 
 	/* Create a screen to render to */
 	Screen *screen;
 	screen = new Screen(HXRES, HYRES);
+//      screen = new Screen(1000, 1000);
 
 
 	int depth=0;
@@ -226,36 +227,81 @@ int main()
   struct timeval stop_time;
   long long total_time = 0;
 #endif
+        int threadcount =0;
+                    int NUM_PTHREADS = 1000;
 
+        pthread_t threads[NUM_PTHREADS];
 	while (depth < MAX_DEPTH) {
 #ifdef TIMING
 	        /* record starting time */
 	        gettimeofday(&start_time, NULL);
 #endif
                 //pthread version
-                 if(PTHREADS_ON == true){
+                 if(PTHREADS_ON == 1){
+
                     int rc;
-                    int NUM_PTHREADS = HYRES;
-                    pthread_t threads[NUM_PTHREADS];
-                    
-                    for(int i=0;i<NUM_PTHREADS;i++) {
-                       struct PThreadParams readParams;
-                       readParams.threadid = (void *)i;
-                       readParams.numcalc = HXRES;
-                       readParams.hy = i;
-                       readParams.screen = screen;
-                       readParams.m =m;
-                       readParams.pal = pal;
-                       rc = pthread_create(&threads[i],NULL,PThreadFunction,&readParams);
-                       if (rc) {
-                          printf("ERROR return code from pthread_create(): %d\n",rc);
-                          exit(-1);
-                       }
-                    }
+                    //int NUM_PTHREADS = 4060;
+
+                   //get the size of the subsquares
+                   double SubSquareSide =  ceil(sqrt((HXRES*HYRES)/(NUM_PTHREADS)));
+
+
+                   int hx2 =0;
+                   int hy2 =0;
+                   int count =0;
+                   while( hy2<HYRES-100){
+                      while(hx2<HXRES-100){
+                           count++;
+                           hx2= hx2+SubSquareSide;
+                      }
+                      hx2 =0;
+                      hy2= hy2+SubSquareSide;
+                   }
+                   std::cout<<"count = " <<count<<"\n";
+
+
+                   //give a subsquare of the screen to each thread
+                  // int hy=0;
+                  // int hx=0;
+                   int threadcount =0;
+                   while(hy<HYRES-100){
+                      while(hx<HXRES-100){
+                         //808
+                         //create threads
+                         struct PThreadParams readParams;
+//                         readParams.threadid = (void *)threadcount;
+                         readParams.SubSquareSide = SubSquareSide;
+                         int xpos = hx;
+                         int ypos = hy;
+                         readParams.xpos = xpos;
+                         readParams.ypos = ypos;
+                         readParams.m =m;
+                         readParams.screen = screen;
+                         readParams.pal = pal;
+
+                         rc = pthread_create(&threads[threadcount],NULL,PThreadFunction,&readParams);
+                         threadcount++;
+                       //  std::cout << "created thread" << threadcount << "at ("<<hx<<", "<<hy<<") size of side=" << SubSquareSide<<"\n";
+                         if (rc) {
+                            printf("ERROR return code from pthread_create(): %d\n",rc);
+                            exit(-1);
+                         }
+                         hx= hx+SubSquareSide;
+                      }
+
+                      hy= hy+SubSquareSide;
+                      hx =0;
+
+                   }
+                  // std::cout <<"got to here (hx = "<<hx<<", hy="<<hy << "number of threads created = "<<threadcount<<"\n";
+
+
                     //wait for them to join
-                    for(int i=0;i<NUM_PTHREADS;i++) {
+                    for(int i=0;i<threadcount;i++) {
                          pthread_join( threads[i], NULL);
                     }
+                    hx =0;
+                   hy =0;
 
                  }else{
                   //OMP version
@@ -298,6 +344,7 @@ int main()
 		m *= ZOOM_FACTOR;
 	}
 #ifdef TIMING
+
 	std::cout << "Total executing time " << total_time << " microseconds\n";
 #endif
 	std::cout << "Clean Exit"<< std::endl;
