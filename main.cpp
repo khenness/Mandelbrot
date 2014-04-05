@@ -13,7 +13,7 @@
  * 4) Profile and Optimise
  * 
  * Potential FAQ.
- * 
+ *
  * Q1) Why when I zoom in far while palying with the code, why does the image begin to render all blocky?
  * A1) In order to render at increasing depths we must use increasingly higher precision floats
  * 	   We quickly run out of precision with 32 bits floats. Change all floats to doubles if you want
@@ -27,11 +27,10 @@
 
 /*Change these to try different paralellization methods*/
 const bool OMP_ON = false;
-const int PTHREADS_ON = 0;
+const int PTHREADS_ON = 1;
 int NUM_PTHREADS = 300;  //starting number
 
-const int VECTORIZATION_ON =1;
-const bool SSE_ON = false;
+const int SSE_ON = 1;
 
 
 #include <iostream>
@@ -127,24 +126,15 @@ const int PAL_SIZE = 40;  //Number of entries in the palette
 
 
 
-/* 
+/*
  * Return true if the point cx,cy is a member of set M.
  * iterations is set to the number of iterations until escape.
  */
 bool member(float cx, float cy, int& iterations)
 {
-	float x = 0.0;
-	float y = 0.0;
-	iterations = 0;
-        //potential optimization
-
-/*	while ((x*x + y*y < (2*2)) && (iterations < MAX_ITS)) {
-		float xtemp = x*x - y*y + cx;
-		y = 2*x*y + cy;
-		x = xtemp;
-		iterations++;
-	}
-*/
+        float x = 0.0;
+        float y = 0.0;
+        iterations = 0;
       while ((x*x + y*y < (4)) && (iterations < MAX_ITS)) {
                 float xtemp = x*x - y*y + cx;
                 y = 2*x*y + cy;
@@ -154,9 +144,52 @@ bool member(float cx, float cy, int& iterations)
 
 
 
-	return (iterations == MAX_ITS);
+        return (iterations == MAX_ITS);
 }
 
+
+
+
+//Member function rewritten with SSE - Takes in 4 points at a time and returns the number of iterations.
+__m128 sse_member(__m128 cx, __m128 cy)
+{
+   //initialize variables
+   __m128 x = _mm_set1_ps(0.0);
+   __m128 y = _mm_set1_ps(0.0);
+   __m128 iterations = _mm_set1_ps(0.0);
+   __m128 iterations_values;
+   __m128 mask = _mm_set1_ps(1.0);
+   __m128 temp;
+   int iterations_count = 0;
+   while( (_mm_movemask_ps(iterations_values =(
+		  // x^2 + y^2 < 4?
+	   	  _mm_cmplt_ps( 
+		  // x^2 + y^2
+		   _mm_add_ps( _mm_mul_ps(x,x),_mm_mul_ps(y,y)), 
+	           _mm_set1_ps(4.0) )))
+	   	)!= 0&&
+		iterations_count < MAX_ITS)
+   {
+      iterations = _mm_add_ps(iterations, _mm_and_ps(iterations_values, mask)); 
+
+      // temp =  x^2 - y^2 + cx
+      temp = _mm_add_ps( _mm_sub_ps( _mm_mul_ps(x,x), _mm_mul_ps(y,y)), cx);
+      // y = 2*x*y + cy
+      y = _mm_add_ps( _mm_mul_ps( _mm_mul_ps(x,y), _mm_set1_ps(2.0)), cy);
+
+      x = temp;
+      iterations_count++;
+    
+   }
+
+   return iterations;
+}
+
+
+
+
+
+//Pthreads require you to use a struct to pass parameters.
 struct PThreadParams {
    //struct semaphore mySemaphore;
    void * threadid;
@@ -170,7 +203,7 @@ struct PThreadParams {
 
 
 
-//the function that all the pthreads will use
+/*A Pthread function that draws a single square on the grid*/
 void *PThreadFunction(void *context) {
    //read parameters
    struct PThreadParams *readParams = context;
@@ -181,17 +214,42 @@ void *PThreadFunction(void *context) {
    float m = readParams->m;
    Screen * screen = readParams->screen;
    unsigned char * pal = readParams->pal;
-//#pragma omp parallel for collapse(2)
+
+
    int count =0;
+
    for (int hy=ypos; hy<(ypos+SubSquareSide); hy++) {
+
       for (int hx=xpos; hx<(xpos+SubSquareSide); hx++) {
+
            int iterations;
             // Translate pixel coordinates to complex plane coordinates centred on PX, PY
 
                //potential optimization
+
                float cx = ((((float)hx/(float)HXRES) -0.5 + (PX/(4.0/m)))*(4.0f/m));
                float cy = ((((float)hy/(float)HYRES) -0.5 + (PY/(4.0/m)))*(4.0f/m));
-               if (!member(cx, cy, iterations)) {
+               if(SSE_ON == 1){
+	         __m128 vector_cx = _mm_set1_ps(cx);
+	          __m128 vector_cy = _mm_set1_ps(cy);  //my
+
+                 float temp_member[4];
+                 _mm_store_ps(temp_member, sse_member(vector_cx,vector_cy));
+
+                  for(int i = 0; i < 4; i++){
+                  if(temp_member[i] != MAX_ITS){
+            		/* Point is not a member, colour based on number of iterations before escape */
+			   int col =((int)temp_member[i]%40) - 1;
+			   int b = col*3;
+		       	   screen->putpixel(hx+i, hy, pal[b], pal[b+1], pal[b+2]);
+          	   }else{
+		        /* Point is a member, colour it black */
+	         	screen->putpixel(hx+i, hy, 0, 0, 0);
+              	   }
+                 }
+              }else{
+
+                  if (!member(cx, cy, iterations)) {
                  // Point is not a member, colour based on number of iterations before escape 
 
                    count = count+iterations;
@@ -199,24 +257,21 @@ void *PThreadFunction(void *context) {
                    int i=(iterations%40) - 1;
                    int b = i*3;
 
-                  //potential optimization
-                 screen->putpixel(hx, hy, pal[b], pal[b+1], pal[b+2]);
-              }else {
+                    screen->putpixel(hx, hy, pal[b], pal[b+1], pal[b+2]);
+                 }else {
                     // Point is a member, colour it black 
-                    screen->putpixel(hx, hy, 0, 0, 0);
-              }
+                       screen->putpixel(hx, hy, 0, 0, 0);
+                 }
+               }
            }
          }
-     //   screendata[xpos][ypos] = count;
-//        std::cout << "thread ("<< xpos <<", "<<ypos <<")'s iterations = "<<count<<"\n.";
 	pthread_exit(NULL); 
 } 
 
 
 int main()
-{	
+{
 
-//        int[][] array;
 	int hx=0;
         int hy=0;
 
@@ -225,7 +280,6 @@ int main()
 	/* Create a screen to render to */
 	Screen *screen;
 	screen = new Screen(HXRES, HYRES);
-//      screen = new Screen(1000, 1000);
 
 
 	int depth=0;
@@ -236,58 +290,33 @@ int main()
   long long total_time = 0;
 #endif
         int threadcount =0;
-//                    int NUM_PTHREADS = 4060;
 
-       // pthread_t threads[NUM_PTHREADS];
 	while (depth < MAX_DEPTH) {
 #ifdef TIMING
 	        /* record starting time */
 	        gettimeofday(&start_time, NULL);
 #endif
-                //pthread version
 
 
                  if(PTHREADS_ON == 1){
 
                     int rc;
-                    //int NUM_PTHREADS = 4060;
-
-                   //get the size of the subsquares
                    double SubSquareSide =  ceil(sqrt((HXRES*HYRES)/(NUM_PTHREADS)));
-
-/*
-                   int hx2 =0;
-                   int hy2 =0;
-                   int count =0;
-                   while( hy2<HYRES-100){
-                      while(hx2<HXRES-100){
-                           count++;
-                           hx2= hx2+SubSquareSide;
-                      }
-                      hx2 =0;
-                      hy2= hy2+SubSquareSide;
-                   }
-                  // std::cout<<"count = " <<count<<"\n";
-*/
-//                   pthread_t threads[NUM_PTHREADS];
+                        /*As the Mandelbrot set gets harder to compute, we give it more threads. (The squares in the grid get smaller)*/
                          if(depth %20 == 0  ){
-                            NUM_PTHREADS = NUM_PTHREADS +300;
+                            NUM_PTHREADS = NUM_PTHREADS +300; // we add on 300 threads for each multiple of 20.
                             SubSquareSide =  ceil(sqrt((HXRES*HYRES)/(NUM_PTHREADS)));
                          }
                          pthread_t threads[NUM_PTHREADS];
 
 
-                   //give a subsquare of the screen to each thread
-                  // int hy=0;
-                  // int hx=0;
+                  /*Create a pthread for each square on the grid*/
                    int threadcount =0;
                    while(hy<HYRES-SubSquareSide){
                       while(hx<HXRES-SubSquareSide){
-                         //808
-                          
-                           //create threads
+                           
+                            //pthreads require you to make a struct to pass parameters
                             struct PThreadParams readParams;
-//                          readParams.threadid = (void *)threadcount;
                             readParams.SubSquareSide = SubSquareSide;
                             int xpos = hx;
                             int ypos = hy;
@@ -297,25 +326,21 @@ int main()
                             readParams.screen = screen;
                             readParams.pal = pal;
 
+                            //create the threads. (See PthreadFunction for their behavior)
                             rc = pthread_create(&threads[threadcount],NULL,PThreadFunction,&readParams);
                             threadcount++;
-                          //  std::cout << "created thread" << threadcount << "at ("<<hx<<", "<<hy<<") size of side=" << SubSquareSide<<"\n";
                             if (rc) {
                                printf("ERROR return code from pthread_create(): %d\n",rc);
                                exit(-1);
                             }
-                   //      }
                          hx= hx+SubSquareSide;
                       }
-
                       hy= hy+SubSquareSide;
                       hx =0;
 
                    }
-                  // std::cout <<"got to here (hx = "<<hx<<", hy="<<hy << "number of threads created = "<<threadcount<<"\n";
 
-
-                    //wait for them to join
+                    //wait for all the pthreads to finish
                     for(int i=0;i<threadcount;i++) {
                          pthread_join( threads[i], NULL);
                     }
@@ -323,8 +348,13 @@ int main()
                    hy =0;
 
                  }else{
-                  //OMP version
-                    #pragma omp parallel for collapse(2)  //change
+
+
+
+                  //This is the comparison version using OMP
+
+                    #pragma omp parallel for collapse(2) 
+
 		    for (hy=0; hy<HYRES; hy++) {
 	               for (hx=0; hx<HXRES; hx++) {
 		          int iterations;
